@@ -130,7 +130,7 @@ def process_and_reply(page_id: str, recipient_id: str, text: str):
 
 async def delayed_process_messages(page_id: str, recipient_id: str):
     # Müştərinin ardıcıl yazmasını 3 saniyə gözləyir
-    await asyncio.sleep(3.0)
+    await asyncio.sleep(15.0)
     
     messages = USER_BUFFERS.pop(recipient_id, [])
     USER_TASKS.pop(recipient_id, None)
