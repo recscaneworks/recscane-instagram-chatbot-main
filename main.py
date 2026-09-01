@@ -76,7 +76,6 @@ def generate_ai_reply(user_message: str) -> str:
         return "Salam! Mesajınız qeydə alındı, tezliklə əməkdaşlarımız sizə geri dönüş edəcək."
 
 def process_and_reply(page_id: str, recipient_id: str, text: str):
-    # Süni intellekt cavab hazırlayır
     ai_reply = generate_ai_reply(text)
     
     url = f"https://graph.instagram.com/v20.0/{page_id}/messages"
@@ -84,12 +83,18 @@ def process_and_reply(page_id: str, recipient_id: str, text: str):
         "Authorization": f"Bearer {PAGE_ACCESS_TOKEN.strip()}",
         "Content-Type": "application/json"
     }
-    payload = {
-        "recipient": {"id": recipient_id},
-        "message": {"text": ai_reply}
-    }
-    res = requests.post(url, headers=headers, json=payload)
-    print("META GÖNDƏRMƏ:", res.status_code, res.text)
+    
+    # 1000 simvol limitini aşmamaq üçün mətni 950 simvolluq hissələrə bölürük
+    max_len = 950
+    chunks = [ai_reply[i:i + max_len] for i in range(0, len(ai_reply), max_len)]
+    
+    for chunk in chunks:
+        payload = {
+            "recipient": {"id": recipient_id},
+            "message": {"text": chunk}
+        }
+        res = requests.post(url, headers=headers, json=payload)
+        print("META GÖNDƏRMƏ STATU:", res.status_code, res.text)
 
 @app.post("/webhook")
 async def handle_messages(request: Request, background_tasks: BackgroundTasks):
