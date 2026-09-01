@@ -1,8 +1,10 @@
-from fastapi import FastAPI, Request, Response, HTTPException, BackgroundTasks
+import os
+import asyncio
+import textwrap
+import requests
+from fastapi import FastAPI, Request, Response, HTTPException
 from google import genai
 from google.genai import types
-import requests
-import os
 
 app = FastAPI()
 
@@ -14,6 +16,10 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 client = None
 if GEMINI_API_KEY:
     client = genai.Client(api_key=GEMINI_API_KEY.strip())
+
+# İstifadəçilərin dalbadal gələn mesajlarını toplamaq üçün bufer
+USER_BUFFERS = {}
+USER_TASKS = {}
 
 # RECSCANENIN TƏLİMAT BAZASI VƏ MENYUSU (TRAIN HİSSƏSİ)
 SYSTEM_PROMPT = """
@@ -65,7 +71,7 @@ QƏTİ QAYDALAR:
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def home():
-    return {"status": "Mirvari Gemini Bot 24/7 aktivdir"}
+    return {"status": "RecScane AI Agent 24/7 aktivdir"}
 
 @app.get("/webhook")
 def verify_webhook(request: Request):
@@ -89,15 +95,13 @@ def generate_ai_reply(user_message: str) -> str:
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
-                temperature=0.7
+                temperature=0.3
             )
         )
         return response.text
     except Exception as e:
         print("GEMINI XƏTASI:", e)
         return "Salam! Mesajınız qeydə alındı, tezliklə əməkdaşlarımız sizə geri dönüş edəcək."
-
-import textwrap
 
 def process_and_reply(page_id: str, recipient_id: str, text: str):
     ai_reply = generate_ai_reply(text)
@@ -124,8 +128,22 @@ def process_and_reply(page_id: str, recipient_id: str, text: str):
         res = requests.post(url, headers=headers, json=payload)
         print("META GÖNDƏRMƏ STATU:", res.status_code, res.text)
 
+async def delayed_process_messages(page_id: str, recipient_id: str):
+    # Müştərinin ardıcıl yazmasını 3 saniyə gözləyir
+    await asyncio.sleep(3.0)
+    
+    messages = USER_BUFFERS.pop(recipient_id, [])
+    USER_TASKS.pop(recipient_id, None)
+    
+    if not messages:
+        return
+        
+    full_text = "\n".join(messages)
+    # Bloklanma olmadan sinxron göndərməni icra edir
+    await asyncio.to_thread(process_and_reply, page_id, recipient_id, full_text)
+
 @app.post("/webhook")
-async def handle_messages(request: Request, background_tasks: BackgroundTasks):
+async def handle_messages(request: Request):
     data = await request.json()
     
     if data.get("object") == "instagram":
@@ -137,7 +155,18 @@ async def handle_messages(request: Request, background_tasks: BackgroundTasks):
                 text = message.get("text")
 
                 if text and not message.get("is_echo"):
-                    background_tasks.add_task(process_and_reply, page_id, sender_id, text)
+                    if sender_id not in USER_BUFFERS:
+                        USER_BUFFERS[sender_id] = []
+                    USER_BUFFERS[sender_id].append(text)
+                    
+                    # Əvvəlki sayğac varsa sıfırlayırıq
+                    if sender_id in USER_TASKS and not USER_TASKS[sender_id].done():
+                        USER_TASKS[sender_id].cancel()
+                        
+                    # 3 saniyəlik yeni gözləmə başladırıq
+                    USER_TASKS[sender_id] = asyncio.create_task(
+                        delayed_process_messages(page_id, sender_id)
+                    )
 
         return {"status": "EVENT_RECEIVED"}
     return Response(status_code=404)
