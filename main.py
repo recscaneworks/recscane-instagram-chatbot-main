@@ -3,21 +3,20 @@ import asyncio
 import textwrap
 import requests
 from fastapi import FastAPI, Request, Response, HTTPException
-from groq import Groq
+import google.generativeai as genai
 
 app = FastAPI()
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "menim_gizli_kodum_123")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-client = None
-if GROQ_API_KEY:
+if GEMINI_API_KEY:
     try:
-        client = Groq(api_key=GROQ_API_KEY.strip())
-        print("GROQ client yaradildi")
+        genai.configure(api_key=GEMINI_API_KEY.strip())
+        print("GEMINI client yaradildi")
     except Exception as e:
-        print("GROQ client xetasi:", e)
+        print("GEMINI config xetasi:", e)
 
 USER_BUFFERS = {}
 USER_TASKS = {}
@@ -31,7 +30,7 @@ QƏTİ QAYDALAR:
 2. DAXİLİ ANALİZ QADAĞASI: İngiliscə və ya daxili qaralama, 'Draft', 'Step', 'Calculation' yazma. Müştəriyə yalnız hazır və səliqəli Azərbaycan dilindəki cavabı göndər.
 3. HƏR DƏFƏ SALAM VERMƏ: Dialoq davam edirsə, hər mesaja təkrar salamla başlama.
 4. MOBİL + VİRAL EDİT QADAĞASI: Müştəri Mobil çəkiliş seçdikdə, Viral Edit xidməti təklif olunmur.
-5. FORMAT: Cavabları qısa, maddəli, konkret və Instagram DM formatına uyğun oxunaqlı saxla.
+5. FORMAT: Cavabları qısa, maddəli, konkret və Instagram DM formatına uyğun oxunaqlı saxla. Emojilərdən az istifadə et.
 
 "ÖZ PAKETİNİ ÖZÜN QUR" HESABLAMA BAZASI:
 1. Saatlıq Çəkiliş: Mobil 40 AZN/saat (+20), Osmo 60 AZN/saat (+30), Pro Kamera 120 AZN/saat (+60), Komanda 200 AZN/saat (+100)
@@ -45,7 +44,7 @@ QƏTİ QAYDALAR:
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def home():
-    return {"status": "RecScane AI Agent 24/7 aktivdir"}
+    return {"status": "RecScane AI Agent Gemini ile 24/7 aktivdir"}
 
 @app.get("/webhook")
 def verify_webhook(request: Request):
@@ -60,32 +59,20 @@ def verify_webhook(request: Request):
     raise HTTPException(status_code=400, detail="Xətalı sorğu")
 
 def generate_ai_reply(user_message: str) -> str:
-    if not client:
-        print("GROQ client yoxdur - API KEY bosdur")
+    if not GEMINI_API_KEY:
+        print("GEMINI API KEY BOSDUR!")
         return "Salam! Zəhmət olmasa bir az sonra yazın, sistem yenilənir."
-
-    models_to_try = ["llama-3.1-8b-instant", "llama-3.1-70b-versatile", "gemma2-9b-it"]
-
-    for model_name in models_to_try:
-        try:
-            print(f"Model yoxlanir: {model_name}")
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_message}
-                ],
-                temperature=0.3,
-                max_tokens=1000
-            )
-            print(f"UGUR: {model_name} ile cavab alindi")
-            return completion.choices[0].message.content
-        except Exception as e:
-            print(f"GROQ XƏTASI {model_name}:", e)
-            continue
-
-    print("BUTUN MODELLER UGURSUZ OLDU")
-    return "Salam! Mesajınız qeydə alındı, tezliklə əməkdaşlarımız sizə geri dönüş edəcək."
+    try:
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=SYSTEM_PROMPT
+        )
+        response = model.generate_content(user_message)
+        print(f"GEMINI UGUR: {response.text[:200]}")
+        return response.text
+    except Exception as e:
+        print(f"GEMINI XƏTASI:", e)
+        return "Salam! Mesajınız qeydə alındı, tezliklə əməkdaşlarımız sizə geri dönüş edəcək."
 
 def process_and_reply(page_id: str, recipient_id: str, text: str):
     ai_reply = generate_ai_reply(text)
