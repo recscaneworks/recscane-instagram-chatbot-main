@@ -9,12 +9,12 @@ app = FastAPI()
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "menim_gizli_kodum_123")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 # Groq Müştərisinin başladılması
 client = None
-if GEMINI_API_KEY:
-    client = Groq(api_key=GEMINI_API_KEY.strip())
+if GROQ_API_KEY:
+    client = Groq(api_key=GROQ_API_KEY.strip())
 
 # İstifadəçilərin dalbadal gələn mesajlarını toplamaq üçün bufer
 USER_BUFFERS = {}
