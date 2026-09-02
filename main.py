@@ -13,7 +13,11 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 client = None
 if GROQ_API_KEY:
-    client = Groq(api_key=GROQ_API_KEY.strip())
+    try:
+        client = Groq(api_key=GROQ_API_KEY.strip())
+        print("GROQ client yaradildi")
+    except Exception as e:
+        print("GROQ client xetasi:", e)
 
 USER_BUFFERS = {}
 USER_TASKS = {}
@@ -57,21 +61,31 @@ def verify_webhook(request: Request):
 
 def generate_ai_reply(user_message: str) -> str:
     if not client:
-        return "Salam! Sistem yenilənir, bir az sonra yazın."
-    try:
-        completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message}
-            ],
-            temperature=0.3,
-            max_tokens=1000
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        print("GROQ XƏTASI:", e)
-        return "Salam! Mesajınız qeydə alındı, tezliklə əməkdaşlarımız sizə geri dönüş edəcək."
+        print("GROQ client yoxdur - API KEY bosdur")
+        return "Salam! Zəhmət olmasa bir az sonra yazın, sistem yenilənir."
+
+    models_to_try = ["llama-3.1-8b-instant", "llama-3.1-70b-versatile", "gemma2-9b-it"]
+
+    for model_name in models_to_try:
+        try:
+            print(f"Model yoxlanir: {model_name}")
+            completion = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=0.3,
+                max_tokens=1000
+            )
+            print(f"UGUR: {model_name} ile cavab alindi")
+            return completion.choices[0].message.content
+        except Exception as e:
+            print(f"GROQ XƏTASI {model_name}:", e)
+            continue
+
+    print("BUTUN MODELLER UGURSUZ OLDU")
+    return "Salam! Mesajınız qeydə alındı, tezliklə əməkdaşlarımız sizə geri dönüş edəcək."
 
 def process_and_reply(page_id: str, recipient_id: str, text: str):
     ai_reply = generate_ai_reply(text)
