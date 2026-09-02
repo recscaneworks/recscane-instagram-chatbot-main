@@ -90,7 +90,7 @@ def generate_ai_reply(user_message: str) -> str:
         return "Salam! Zəhmət olmasa bir az sonra yazın, sistem yenilənir."
     try:
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-70b-versatile",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message}
