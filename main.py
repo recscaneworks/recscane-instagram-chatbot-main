@@ -1,7 +1,6 @@
 import os
 import asyncio
 import textwrap
-import time
 import requests
 from fastapi import FastAPI, Request, Response, HTTPException
 from google import genai
@@ -25,21 +24,29 @@ USER_CHATS = {}
 SENT_BY_BOT_MESSAGES = set()
 
 # ==========================================
-# 1. QADAĞA VƏ NƏZARƏT TƏNZİMLƏMƏLƏRİ
+# 1. QADAĞA VƏ DAİMİ BLOKLANMA MEXANİZMİ
 # ==========================================
-# Cavab verilməyəcək Instagram istifadəçi adları (kiçik hərflərlə, @ olmadan)
 IGNORED_USERNAMES = {
     "mifantasty",
     "hesen_akbar",
     "hesen_rec",
 }
 
-# Müəyyən etdiyin konkret Instagram ID-lər (əgər ID bilirsənsə)
+IGNORED_FILE = "ignored_ids.txt"
 IGNORED_USER_IDS = set()
 
-# Əllə cavab verdiyin insanları 24 saatlıq saxlamaq üçün: {user_id: susdurulma_bitmə_vaxtı}
-MUTED_USERS = {}
-MUTE_DURATION_SECONDS = 24 * 60 * 60  # 24 saat (saniyə ilə)
+# Əvvəl bloklanan ID-ləri fayldan yükləyirik
+if os.path.exists(IGNORED_FILE):
+    with open(IGNORED_FILE, "r", encoding="utf-8") as f:
+        IGNORED_USER_IDS = {line.strip() for line in f if line.strip()}
+
+def block_user_permanently(user_id: str):
+    """İstifadəçini birdəfəlik qara siyahıya atır və fayla qeyd edir."""
+    if user_id not in IGNORED_USER_IDS:
+        IGNORED_USER_IDS.add(user_id)
+        with open(IGNORED_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{user_id}\n")
+        print(f"[DAİMİ BLOK] {user_id} qara siyahıya əlavə olundu. Artıq heç vaxt cavab verilməyəcək.")
 
 # Direct üçün prompt
 DM_SYSTEM_PROMPT = """
@@ -109,30 +116,17 @@ def verify_webhook(request: Request):
     raise HTTPException(status_code=400, detail="Xətalı sorğu")
 
 def is_user_blocked(user_id: str) -> bool:
-    """İstifadəçinin qara siyahıda və ya 24 saatlıq susdurulmada olmasını yoxlayır."""
-    current_time = time.time()
-    
-    # 1. 24 saatlıq əllə idarə yoxlaması
-    if user_id in MUTED_USERS:
-        if current_time < MUTED_USERS[user_id]:
-            print(f"[BLOK] {user_id} hazırda susdurulub (manual cavab verilib).")
-            return True
-        else:
-            del MUTED_USERS[user_id]
-
-    # 2. Konkret ID qara siyahısı
+    """İstifadəçinin qara siyahıda olmasını yoxlayır."""
     if user_id in IGNORED_USER_IDS:
         return True
 
-    # 3. İstifadəçi adını yoxlamaq üçün Instagram Graph API sorğusu
     if IGNORED_USERNAMES:
         try:
             url = f"https://graph.instagram.com/v20.0/{user_id}?fields=username&access_token={PAGE_ACCESS_TOKEN.strip()}"
             res = requests.get(url).json()
             username = res.get("username", "").lower()
             if username in IGNORED_USERNAMES:
-                IGNORED_USER_IDS.add(user_id)
-                print(f"[QARA SİYAHI] @{username} botdan bloklandı.")
+                block_user_permanently(user_id)
                 return True
         except Exception as e:
             print("İstifadəçi adı yoxlanarkən xəta:", e)
@@ -197,7 +191,6 @@ def process_and_reply(page_id: str, recipient_id: str, text: str):
         res = requests.post(url, headers=headers, json=payload)
         print("DM GÖNDƏRMƏ STATU:", res.status_code, res.text)
         
-        # Botun öz göndərdiyi mesajın ID-sini saxlayırıq ki, echo gələndə özünü susdurmasın
         if res.status_code == 200:
             try:
                 msg_id = res.json().get("message_id")
@@ -250,23 +243,24 @@ async def handle_events(request: Request):
                 text = message.get("text")
                 is_echo = message.get("is_echo", False)
 
-                # ƏLLƏ CAVAB VERİLDİKDƏ BOTUN 24 SAAT SUSMASI:
+                # ƏLLƏ CAVAB VERİLDİKDƏ:
                 if is_echo:
                     mid = message.get("mid")
                     app_id = message.get("app_id")
 
-                    # Əgər mesajı botun özü göndəribsə, susdurma
+                    # Botun öz mesajıdırsa keçirik
                     if (mid and mid in SENT_BY_BOT_MESSAGES) or app_id:
                         if mid in SENT_BY_BOT_MESSAGES:
                             SENT_BY_BOT_MESSAGES.remove(mid)
                         continue
 
-                    # Əgər mesaj səhifədən manual (əllə) yazılıbsa:
-                    MUTED_USERS[recipient_id] = time.time() + MUTE_DURATION_SECONDS
+                    # Əllə yazılan mesajdırsa, istifadəçini ömürlük blok siyahısına salırıq:
+                    block_user_permanently(recipient_id)
+                    
+                    # Hazırda gözləyən növbəsi varsa ləğv edirik
                     if recipient_id in USER_TASKS and not USER_TASKS[recipient_id].done():
                         USER_TASKS[recipient_id].cancel()
                     USER_BUFFERS.pop(recipient_id, None)
-                    print(f"[MANUAL INTERVENTION] {recipient_id} 24 saatlıq susduruldu.")
                     continue
 
                 # Müştəri mesaj yazdıqda
