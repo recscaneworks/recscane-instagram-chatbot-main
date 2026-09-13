@@ -21,6 +21,9 @@ USER_BUFFERS = {}
 USER_TASKS = {}
 USER_CHATS = {}
 
+# Botun öz göndərdiyi mesajların ID-lərini saxlamaq üçün
+SENT_BY_BOT_MESSAGES = set()
+
 # ==========================================
 # 1. QADAĞA VƏ NƏZARƏT TƏNZİMLƏMƏLƏRİ
 # ==========================================
@@ -115,7 +118,7 @@ def is_user_blocked(user_id: str) -> bool:
             print(f"[BLOK] {user_id} hazırda susdurulub (manual cavab verilib).")
             return True
         else:
-            del MUTED_USERS[user_id]  # Vaxtı bitibsə sil
+            del MUTED_USERS[user_id]
 
     # 2. Konkret ID qara siyahısı
     if user_id in IGNORED_USER_IDS:
@@ -128,7 +131,7 @@ def is_user_blocked(user_id: str) -> bool:
             res = requests.get(url).json()
             username = res.get("username", "").lower()
             if username in IGNORED_USERNAMES:
-                IGNORED_USER_IDS.add(user_id)  # Təkrar sorğu atmamaq üçün ID-ni də əlavə edirik
+                IGNORED_USER_IDS.add(user_id)
                 print(f"[QARA SİYAHI] @{username} botdan bloklandı.")
                 return True
         except Exception as e:
@@ -142,7 +145,7 @@ def generate_ai_reply(user_message: str, is_comment: bool = False, sender_id: st
     try:
         if is_comment:
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.6-flash",
                 contents=user_message,
                 config=types.GenerateContentConfig(
                     system_instruction=COMMENT_SYSTEM_PROMPT,
@@ -193,6 +196,15 @@ def process_and_reply(page_id: str, recipient_id: str, text: str):
         }
         res = requests.post(url, headers=headers, json=payload)
         print("DM GÖNDƏRMƏ STATU:", res.status_code, res.text)
+        
+        # Botun öz göndərdiyi mesajın ID-sini saxlayırıq ki, echo gələndə özünü susdurmasın
+        if res.status_code == 200:
+            try:
+                msg_id = res.json().get("message_id")
+                if msg_id:
+                    SENT_BY_BOT_MESSAGES.add(msg_id)
+            except Exception:
+                pass
 
 def reply_to_comment(comment_id: str, comment_text: str, sender_id: str):
     if is_user_blocked(sender_id):
@@ -239,11 +251,18 @@ async def handle_events(request: Request):
                 is_echo = message.get("is_echo", False)
 
                 # ƏLLƏ CAVAB VERİLDİKDƏ BOTUN 24 SAAT SUSMASI:
-                # Sən Direct-dən yazanda Instagram `is_echo: True` göndərir.
-                # Bu halda mesajı alan şəxs (recipient_id) 24 saatlıq susdurulur.
                 if is_echo:
+                    mid = message.get("mid")
+                    app_id = message.get("app_id")
+
+                    # Əgər mesajı botun özü göndəribsə, susdurma
+                    if (mid and mid in SENT_BY_BOT_MESSAGES) or app_id:
+                        if mid in SENT_BY_BOT_MESSAGES:
+                            SENT_BY_BOT_MESSAGES.remove(mid)
+                        continue
+
+                    # Əgər mesaj səhifədən manual (əllə) yazılıbsa:
                     MUTED_USERS[recipient_id] = time.time() + MUTE_DURATION_SECONDS
-                    # Əgər həmin anda növbədə botun göndərəcəyi cavab vardısa, onu ləğv et
                     if recipient_id in USER_TASKS and not USER_TASKS[recipient_id].done():
                         USER_TASKS[recipient_id].cancel()
                     USER_BUFFERS.pop(recipient_id, None)
