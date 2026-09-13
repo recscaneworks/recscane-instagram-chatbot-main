@@ -26,8 +26,9 @@ USER_CHATS = {}
 # ==========================================
 # Cavab verilməyəcək Instagram istifadəçi adları (kiçik hərflərlə, @ olmadan)
 IGNORED_USERNAMES = {
-    "ornek_profil1",
-    "ornek_profil2",
+    "mifantasty",
+    "hesen_akbar",
+    "hesen_rec",
 }
 
 # Müəyyən etdiyin konkret Instagram ID-lər (əgər ID bilirsənsə)
