@@ -20,33 +20,21 @@ USER_BUFFERS = {}
 USER_TASKS = {}
 USER_CHATS = {}
 
-# Botun öz göndərdiyi mesajların ID-lərini saxlamaq üçün
-SENT_BY_BOT_MESSAGES = set()
+# Botun aktiv cavab verdiyi istifadəçilər (özünü bloklamamaq üçün qoruma)
+BOT_ACTIVE_RECIPIENTS = set()
 
 # ==========================================
-# 1. QADAĞA VƏ DAİMİ BLOKLANMA MEXANİZMİ
+# 1. QARA SİYAHI (BLACKLIST) TƏNZİMLƏMƏLƏRİ
 # ==========================================
+# Cavab verilməyəcək Instagram istifadəçi adları
 IGNORED_USERNAMES = {
     "mifantasty",
     "hesen_akbar",
     "hesen_rec",
 }
 
-IGNORED_FILE = "ignored_ids.txt"
+# Bloklanan ID-lər (manual cavab verilənlər də bura əlavə olunacaq)
 IGNORED_USER_IDS = set()
-
-# Əvvəl bloklanan ID-ləri fayldan yükləyirik
-if os.path.exists(IGNORED_FILE):
-    with open(IGNORED_FILE, "r", encoding="utf-8") as f:
-        IGNORED_USER_IDS = {line.strip() for line in f if line.strip()}
-
-def block_user_permanently(user_id: str):
-    """İstifadəçini birdəfəlik qara siyahıya atır və fayla qeyd edir."""
-    if user_id not in IGNORED_USER_IDS:
-        IGNORED_USER_IDS.add(user_id)
-        with open(IGNORED_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{user_id}\n")
-        print(f"[DAİMİ BLOK] {user_id} qara siyahıya əlavə olundu. Artıq heç vaxt cavab verilməyəcək.")
 
 # Direct üçün prompt
 DM_SYSTEM_PROMPT = """
@@ -116,7 +104,7 @@ def verify_webhook(request: Request):
     raise HTTPException(status_code=400, detail="Xətalı sorğu")
 
 def is_user_blocked(user_id: str) -> bool:
-    """İstifadəçinin qara siyahıda olmasını yoxlayır."""
+    """İstifadəçinin blokda olub-olmamasını yoxlayır."""
     if user_id in IGNORED_USER_IDS:
         return True
 
@@ -126,7 +114,8 @@ def is_user_blocked(user_id: str) -> bool:
             res = requests.get(url).json()
             username = res.get("username", "").lower()
             if username in IGNORED_USERNAMES:
-                block_user_permanently(user_id)
+                IGNORED_USER_IDS.add(user_id)
+                print(f"[QARA SİYAHI] @{username} bloklandı.")
                 return True
         except Exception as e:
             print("İstifadəçi adı yoxlanarkən xəta:", e)
@@ -168,36 +157,40 @@ def process_and_reply(page_id: str, recipient_id: str, text: str):
     if is_user_blocked(recipient_id):
         return
 
-    ai_reply = generate_ai_reply(text, is_comment=False, sender_id=recipient_id)
-    
-    url = f"https://graph.instagram.com/v20.0/{page_id}/messages"
-    headers = {
-        "Authorization": f"Bearer {PAGE_ACCESS_TOKEN.strip()}",
-        "Content-Type": "application/json"
-    }
-    
-    chunks = textwrap.wrap(
-        ai_reply,
-        width=900,
-        replace_whitespace=False,
-        break_long_words=False
-    ) or [ai_reply]
-    
-    for chunk in chunks:
-        payload = {
-            "recipient": {"id": recipient_id},
-            "message": {"text": chunk}
-        }
-        res = requests.post(url, headers=headers, json=payload)
-        print("DM GÖNDƏRMƏ STATU:", res.status_code, res.text)
+    # Bot bu adama cavab verməyə başlayır (öz mesajını bloklamasın deyə qoruyuruq)
+    BOT_ACTIVE_RECIPIENTS.add(recipient_id)
+
+    try:
+        ai_reply = generate_ai_reply(text, is_comment=False, sender_id=recipient_id)
         
-        if res.status_code == 200:
-            try:
-                msg_id = res.json().get("message_id")
-                if msg_id:
-                    SENT_BY_BOT_MESSAGES.add(msg_id)
-            except Exception:
-                pass
+        url = f"https://graph.instagram.com/v20.0/{page_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {PAGE_ACCESS_TOKEN.strip()}",
+            "Content-Type": "application/json"
+        }
+        
+        chunks = textwrap.wrap(
+            ai_reply,
+            width=900,
+            replace_whitespace=False,
+            break_long_words=False
+        ) or [ai_reply]
+        
+        for chunk in chunks:
+            payload = {
+                "recipient": {"id": recipient_id},
+                "message": {"text": chunk}
+            }
+            res = requests.post(url, headers=headers, json=payload)
+            print("DM GÖNDƏRMƏ STATU:", res.status_code, res.text)
+    finally:
+        # Mesaj göndərildikdən sonra gələn əks siqnalların keçməsi üçün 10 saniyə qoruyub sonra təmizləyirik
+        import threading
+        def remove_protection():
+            import time
+            time.sleep(10)
+            BOT_ACTIVE_RECIPIENTS.discard(recipient_id)
+        threading.Thread(target=remove_protection, daemon=True).start()
 
 def reply_to_comment(comment_id: str, comment_text: str, sender_id: str):
     if is_user_blocked(sender_id):
@@ -243,21 +236,16 @@ async def handle_events(request: Request):
                 text = message.get("text")
                 is_echo = message.get("is_echo", False)
 
-                # ƏLLƏ CAVAB VERİLDİKDƏ:
+                # ƏLLƏ CAVAB VERİLDİKDƏ YOXLA:
                 if is_echo:
-                    mid = message.get("mid")
-                    app_id = message.get("app_id")
-
-                    # Botun öz mesajıdırsa keçirik
-                    if (mid and mid in SENT_BY_BOT_MESSAGES) or app_id:
-                        if mid in SENT_BY_BOT_MESSAGES:
-                            SENT_BY_BOT_MESSAGES.remove(mid)
+                    # Əgər bu anda bot özü bu istifadəçiyə cavab göndərirsə, bloklama!
+                    if recipient_id in BOT_ACTIVE_RECIPIENTS:
                         continue
 
-                    # Əllə yazılan mesajdırsa, istifadəçini ömürlük blok siyahısına salırıq:
-                    block_user_permanently(recipient_id)
+                    # Əks halda bu, sənin tətbiqdən şəxsən yazdığın manual mesajdır
+                    IGNORED_USER_IDS.add(recipient_id)
+                    print(f"[MANUAL MÜDAXİLƏ] Sən tətbiqdən cavab verdin -> {recipient_id} qara siyahıya düşdü.")
                     
-                    # Hazırda gözləyən növbəsi varsa ləğv edirik
                     if recipient_id in USER_TASKS and not USER_TASKS[recipient_id].done():
                         USER_TASKS[recipient_id].cancel()
                     USER_BUFFERS.pop(recipient_id, None)
