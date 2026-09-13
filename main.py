@@ -90,6 +90,16 @@ QAYDALAR:
 def home():
     return {"status": "RecScane AI Agent 24/7 aktivdir"}
 
+# Qara siyahını görmək üçün admin endpoint-i
+@app.get("/admin/blacklist")
+def get_blacklist(secret: str = ""):
+    if secret != VERIFY_TOKEN:
+        raise HTTPException(status_code=403, detail="İcazə yoxdur")
+    return {
+        "count": len(IGNORED_USER_IDS),
+        "ignored_ids": list(IGNORED_USER_IDS)
+    }
+
 @app.get("/webhook")
 def verify_webhook(request: Request):
     params = request.query_params
