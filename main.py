@@ -153,7 +153,7 @@ def generate_ai_reply(user_message: str, is_comment: bool = False, sender_id: st
         else:
             if sender_id not in USER_CHATS:
                 USER_CHATS[sender_id] = client.chats.create(
-                    model="gemini-2.5-flash",
+                    model="gemini-3.6-flash",
                     config=types.GenerateContentConfig(
                         system_instruction=DM_SYSTEM_PROMPT,
                         temperature=0.2
